@@ -14,6 +14,7 @@ replicas = []
 number_of_bytes_processed = 0
 updated_replica_cnt = 0
 any_set_cmd = False
+queues = dict()
 
 
 def handle_master_connection(conn: socket.socket, replica_port):
@@ -156,6 +157,12 @@ def helper(conn: socket.socket, redis: Redis, cmd: bytes, args: list[bytes]):
     global updated_replica_cnt
     global any_set_cmd
 
+    if queues.get(conn, None) is not None and cmd != b"exec" and cmd != b"discard":
+        q = queues.get(conn)
+        q.append((cmd, args))
+        conn.send("+QUEUED\r\n".encode())
+        return
+
     name = cmd.decode()
 
     if name == "ping":
@@ -183,7 +190,7 @@ def helper(conn: socket.socket, redis: Redis, cmd: bytes, args: list[bytes]):
             )
 
         any_set_cmd = True
-        conn.send("+OK\r\n".encode())
+        return "+OK\r\n"
 
     elif name == "get":
         key = args[0].decode()
@@ -206,9 +213,60 @@ def helper(conn: socket.socket, redis: Redis, cmd: bytes, args: list[bytes]):
             val = storage.get(key)
 
         if val is not None:
-            conn.send(f"${len(val)}\r\n{val}\r\n".encode())
+            return f"${len(val)}\r\n{val}\r\n"
         else:
-            conn.send("$-1\r\n".encode())
+            return "$-1\r\n"
+
+    elif name == "incr":
+        key = args[0].decode()
+        val = storage.get(key)
+        if val is None:
+            val = 0
+
+        if not isinstance(val, int):
+            try:
+                val = int(val)
+            except Exception:
+                return "-ERR value is not an integer or out of range\r\n"
+            
+        new_val = val + 1
+
+        storage.set(key, str(new_val))
+        return f":{new_val}\r\n"
+    
+    elif name == "multi":
+        queues[conn] = []
+        conn.send("+OK\r\n".encode())
+    
+    elif name == "exec":
+        q = queues.get(conn, None)
+        if q is None:
+            conn.send("-ERR EXEC without MULTI\r\n".encode())
+            return
+        
+        queues.pop(conn)
+
+        if len(q) == 0:
+            conn.send("*0\r\n".encode())
+            return     
+
+        temp = f"*{len(q)}\r\n"
+
+        for c, a in q:
+            t = helper(conn, redis, c, a)
+            temp = f"{temp}{t}"
+        
+        conn.send(temp.encode())
+    
+    elif name == "discard":
+        q = queues.get(conn, None)
+        if q is None:
+            conn.send("-ERR DISCARD without MULTI\r\n".encode())
+            return
+        
+        queues.pop(conn)
+        conn.send("+OK\r\n".encode())
+
 
     elif name == "info":
         res = f"role:{redis.role}\r\nmaster_replid:8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb\r\nmaster_repl_offset:0"
@@ -297,7 +355,9 @@ def handle_connection(conn: socket.socket, redis: Redis):
                 command = decoded[0].lower()
                 args = decoded[1:]
 
-            helper(conn, redis, command, args)
+            ret = helper(conn, redis, command, args)
+            if ret is not None:
+                conn.send(ret.encode())
 
 
 def main(args):
