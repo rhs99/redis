@@ -11,7 +11,10 @@ class Storage:
     def get(self, key):
         # self.mutex.acquire()
 
-        if key in self.expiry and self.expiry[key] <= time.time() * 1000:
+        if (
+            key in self.expiry
+            and self.expiry[key] <= time.time() * 1000
+        ):
             self.data.pop(key)
             self.expiry.pop(key)
 
@@ -26,6 +29,8 @@ class Storage:
 
         self.data[key] = val
         if exp:
-            self.expiry[key] = time.time() * 1000 + float(exp)
+            self.expiry[key] = time.time() * 1000 + float(
+                exp
+            )
 
         # self.mutex.release()

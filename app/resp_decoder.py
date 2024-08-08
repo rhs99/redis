@@ -16,26 +16,37 @@ class RESPDecoder:
         elif data_type_byte == b"*":
             return self.decode_array()
         else:
-            raise Exception(f"Unknown data type byte: {data_type_byte}")
+            raise Exception(
+                f"Unknown data type byte: {data_type_byte}"
+            )
 
     def decode_simple_string(self):
         return self.connection.read_until_delimeter(b"\r\n")
 
     def decode_bulk_string(self):
-        string_length = int(self.connection.read_until_delimeter(b"\r\n"))
+        string_length = int(
+            self.connection.read_until_delimeter(b"\r\n")
+        )
         data = self.connection.read(string_length)
-        assert self.connection.read_until_delimeter(b"\r\n") == b""
+        assert (
+            self.connection.read_until_delimeter(b"\r\n")
+            == b""
+        )
         return data
 
     def decode_rdb(self):
         self.connection.read(1)
-        string_length = int(self.connection.read_until_delimeter(b"\r\n"))
+        string_length = int(
+            self.connection.read_until_delimeter(b"\r\n")
+        )
         data = self.connection.read(string_length)
         return data
 
     def decode_array(self):
         result = []
-        array_length = int(self.connection.read_until_delimeter(b"\r\n"))
+        array_length = int(
+            self.connection.read_until_delimeter(b"\r\n")
+        )
 
         for _ in range(array_length):
             result.append(self.decode())
@@ -57,7 +68,10 @@ class ConnectionBuffer:
 
             self.buffer += data
 
-        data, self.buffer = self.buffer[:buff_size], self.buffer[buff_size:]
+        data, self.buffer = (
+            self.buffer[:buff_size],
+            self.buffer[buff_size:],
+        )
         return data
 
     def read_until_delimeter(self, delimeter):
@@ -70,5 +84,7 @@ class ConnectionBuffer:
 
             self.buffer += data
 
-        data_before_delim, delim, self.buffer = self.buffer.partition(delimeter)
+        data_before_delim, delim, self.buffer = (
+            self.buffer.partition(delimeter)
+        )
         return data_before_delim
