@@ -14,6 +14,7 @@ def main(args):
 
 if __name__ == "__main__":
     arg_parser = argparse.ArgumentParser()
+
     arg_parser.add_argument("--port", dest="port", default=6379)
     arg_parser.add_argument("--replicaof", dest="master_addr", default=None)
     arg_parser.add_argument("--dir", dest="dir", default="/tmp")
@@ -22,6 +23,7 @@ if __name__ == "__main__":
         dest="db_filename",
         default="dump.rdb",
     )
+    
     args = arg_parser.parse_args()
 
     main(args)
