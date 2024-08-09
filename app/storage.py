@@ -7,6 +7,7 @@ class Storage:
         # self.mutex = threading.Lock()
         self.data = dict()
         self.expiry = dict()
+        self.stream = set()
 
     def get(self, key):
         # self.mutex.acquire()

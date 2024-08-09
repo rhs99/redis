@@ -152,6 +152,11 @@ def helper(
 
     elif name == "type":
         key = args[0].decode()
+
+        if key in storage.stream:
+            conn.send("+stream\r\n".encode())
+            return
+
         val = storage.get(key)
 
         if val is None:
@@ -222,6 +227,236 @@ def helper(
 
         storage.set(key, str(new_val))
         return f":{new_val}\r\n"
+
+
+    elif name == "xadd":
+        key = args[0].decode()
+        id = args[1].decode()
+
+        prev = storage.get(key)
+        prev_ms = 0
+        prev_sq = 0
+        curr_ms = None
+        curr_sq = None
+
+        if prev is not None:
+            prev_id = prev.split(",")[-1].split(" ")[0]
+            prev_ms = int(prev_id.split("-")[0])
+            prev_sq = int(prev_id.split("-")[1])
+        
+        if id == "*":
+            if prev is not None:
+                curr_ms = prev_ms
+                curr_sq = prev_sq + 1
+            else:
+                curr_ms = int(time.time()*1000)
+                curr_sq = 0
+        elif "-*" in id:
+            curr_ms = int(id.split("-")[0])
+            curr_sq = 0 if curr_ms > 0 else 1
+
+            if prev is not None:
+                if curr_ms < prev_ms:
+                    conn.send("-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n".encode())
+                    return
+                elif curr_ms == prev_ms:
+                    curr_sq = prev_sq + 1
+        else:
+            curr_ms = int(id.split("-")[0])
+            curr_sq = int(id.split("-")[1])
+
+            if curr_ms < 0 or (curr_ms == 0 and curr_sq <= 0):
+                conn.send("-ERR The ID specified in XADD must be greater than 0-0\r\n".encode())
+                return
+
+        valid = False
+        if curr_ms > prev_ms or (curr_ms == prev_ms and curr_sq > prev_sq):
+            valid = True
+
+        if not valid:
+            conn.send("-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n".encode())
+            return
+
+        pairs = args[2:]
+
+        new_id = f"{curr_ms}-{curr_sq}"
+        val = new_id
+
+        for item in pairs:
+            val = f"{val} {item.decode()}"
+
+        if prev is not None:
+            val = f"{prev},{val}"
+        
+        storage.set(key, val)
+        storage.stream.add(key)
+
+        conn.send(f"${len(new_id)}\r\n{new_id}\r\n".encode())        
+
+    elif name == "xrange":
+        key = args[0].decode()
+        start_id = args[1].decode()
+        end_id = args[2].decode()
+
+        start_ms = None
+        start_sq = 0
+        end_ms = None
+        end_sq = 10 ** 9
+
+        if start_id == "-":
+            start_ms = 0
+        elif "-" in start_id:
+            start_ms = int(start_id.split("-")[0])
+            start_sq = int(start_id.split("-")[1])
+        else:
+            start_ms = int(start_id)
+
+        if end_id == "+":
+            end_ms = 10 ** 20
+        elif "-" in end_id:
+            end_ms = int(end_id.split("-")[0])
+            end_sq = int(end_id.split("-")[1])
+        else:
+            end_ms = int(end_id)
+
+        val = storage.get(key)
+
+        if val is None:
+            conn.send("*0\r\n".encode())
+            return
+
+        entries = val.split(",")
+        res = []
+
+        for entry in entries:
+            parts = entry.split(" ")
+            curr_ms, curr_sq = parts[0].split("-")
+
+            curr_ms = int(curr_ms)
+            curr_sq = int(curr_sq)
+
+
+            include = False
+            if curr_ms >= start_ms and curr_ms <= end_ms:
+                if curr_ms == start_ms:
+                    if curr_ms == end_ms:
+                        include = bool(curr_sq >= start_sq and curr_sq <= end_sq)
+                    else:
+                        include = bool(curr_sq >= start_sq)
+                elif curr_ms == end_ms:
+                    include = bool(curr_sq <= end_sq)
+                else:
+                    include = True
+
+            if include:
+                res.append([parts[0], parts[1:]])
+        
+        temp = f"*{len(res)}\r\n"
+
+        for r in res:
+            temp = f"{temp}*{len(r)}\r\n"
+            temp = f"{temp}${len(r[0])}\r\n{r[0]}\r\n"
+            temp = f"{temp}*{len(r[1])}\r\n"
+            for cv in r[1]:
+                temp = f"{temp}${len(cv)}\r\n{cv}\r\n"
+
+        conn.send(temp.encode())
+
+    elif name == "xread":
+        wait_until_found = False
+
+        if args[0].decode() == "block":
+            timeout = float(args[1].decode())
+            args = args[2:]
+
+            if timeout == 0:
+                wait_until_found = True
+            else:
+                start_at = time.time()
+                while True:
+                    end_at = time.time()
+                    if (end_at-start_at)*1000 > timeout:
+                        break
+
+        args = args[1:]
+        streams = []
+        ids = []
+        offset = len(args) // 2
+
+        for i in range(offset):
+            streams.append(args[i])
+            ids.append(args[i+offset])
+        
+        res = []
+
+        while True:
+            for i in range(offset):
+                key = streams[i].decode()
+                start_id = ids[i].decode()
+
+                start_ms = None
+                start_sq = 0
+
+                if start_id == "-":
+                    start_ms = 0
+                elif "-" in start_id:
+                    start_ms = int(start_id.split("-")[0])
+                    start_sq = int(start_id.split("-")[1])
+                else:
+                    start_ms = int(start_id)
+
+
+                val = storage.get(key)
+
+                if val is None:
+                    continue
+
+                entries = val.split(",")
+                inner_res = []
+
+                for entry in entries:
+                    parts = entry.split(" ")
+                    curr_ms, curr_sq = parts[0].split("-")
+
+                    curr_ms = int(curr_ms)
+                    curr_sq = int(curr_sq)
+
+
+                    include = False
+                    if curr_ms >= start_ms:
+                        if curr_ms == start_ms:
+                            include = bool(curr_sq > start_sq)
+                        else:
+                            include = True
+
+                    if include:
+                        inner_res.append([parts[0], parts[1:]])
+
+                if len(inner_res) > 0:
+                    res.append([key, inner_res])
+
+            if not wait_until_found or len(res) > 0:
+                break
+
+
+        if len(res) == 0:
+            conn.send("$-1\r\n".encode())
+            return
+
+        temp = f"*{len(res)}\r\n"
+
+        for r in res:
+            temp = f"{temp}*{len(r)}\r\n"
+            temp = f"{temp}${len(r[0])}\r\n{r[0]}\r\n"
+            temp = f"{temp}*{len(r[1])}\r\n"
+            for cv in r[1]:
+                temp = f"{temp}*{len(cv)}\r\n"    
+                temp = f"{temp}${len(cv[0])}\r\n{cv[0]}\r\n"
+                temp = f"{temp}*{len(cv[1])}\r\n"    
+                for inv in cv[1]:
+                    temp = f"{temp}${len(inv)}\r\n{inv}\r\n"
+
+        conn.send(temp.encode())
 
     elif name == "multi":
         queues[conn] = []
