@@ -1,4 +1,35 @@
-# functionality for decoding the buffer inputs
+class ConnectionBuffer:
+    def __init__(self, connection):
+        self.connection = connection
+        self.buffer = b""
+
+    def read(self, buff_size):
+        if len(self.buffer) < buff_size:
+            data = self.connection.recv(1024)
+            if not data:
+                return None
+
+            self.buffer += data
+
+        data, self.buffer = (
+            self.buffer[:buff_size],
+            self.buffer[buff_size:],
+        )
+        return data
+
+    def read_until_delimeter(self, delimeter):
+        while delimeter not in self.buffer:
+            data = self.connection.recv(1024)
+
+            if not data:
+                return None
+
+            self.buffer += data
+
+        data_before_delim, delim, self.buffer = self.buffer.partition(delimeter)
+        return data_before_delim
+
+
 class RESPDecoder:
     def __init__(self, connection):
         self.connection = ConnectionBuffer(connection)
@@ -16,75 +47,28 @@ class RESPDecoder:
         elif data_type_byte == b"*":
             return self.decode_array()
         else:
-            raise Exception(
-                f"Unknown data type byte: {data_type_byte}"
-            )
+            raise Exception(f"Unknown data type byte: {data_type_byte}")
 
     def decode_simple_string(self):
         return self.connection.read_until_delimeter(b"\r\n")
 
     def decode_bulk_string(self):
-        string_length = int(
-            self.connection.read_until_delimeter(b"\r\n")
-        )
+        string_length = int(self.connection.read_until_delimeter(b"\r\n"))
         data = self.connection.read(string_length)
-        assert (
-            self.connection.read_until_delimeter(b"\r\n")
-            == b""
-        )
+        assert self.connection.read_until_delimeter(b"\r\n") == b""
         return data
 
-    def decode_rdb(self):
+    def decode_empty_rdb_file(self):
         self.connection.read(1)
-        string_length = int(
-            self.connection.read_until_delimeter(b"\r\n")
-        )
+        string_length = int(self.connection.read_until_delimeter(b"\r\n"))
         data = self.connection.read(string_length)
         return data
 
     def decode_array(self):
         result = []
-        array_length = int(
-            self.connection.read_until_delimeter(b"\r\n")
-        )
+        array_length = int(self.connection.read_until_delimeter(b"\r\n"))
 
         for _ in range(array_length):
             result.append(self.decode())
 
         return result
-
-
-class ConnectionBuffer:
-    def __init__(self, connection):
-        self.connection = connection
-        self.buffer = b""
-
-    def read(self, buff_size):
-        # if req buff size has not already been read in
-        if len(self.buffer) < buff_size:
-            data = self.connection.recv(1024)
-            if not data:
-                return None
-
-            self.buffer += data
-
-        data, self.buffer = (
-            self.buffer[:buff_size],
-            self.buffer[buff_size:],
-        )
-        return data
-
-    def read_until_delimeter(self, delimeter):
-        # if buffer does not have delim, more data must be read
-        while delimeter not in self.buffer:
-            data = self.connection.recv(1024)
-
-            if not data:
-                return None
-
-            self.buffer += data
-
-        data_before_delim, delim, self.buffer = (
-            self.buffer.partition(delimeter)
-        )
-        return data_before_delim
